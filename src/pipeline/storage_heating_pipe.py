@@ -1,30 +1,95 @@
-import numpy as np
+"""
+Storage heating profile generation pipeline.
+
+Workflow:
+1. Group households by ERA5 grid location.
+2. Fetch temperature data for each grid.
+3. Convert temperature into heat demand.
+4. Convert heat demand into electricity consumption using storage model.
+5. Return household electricity profiles.
+"""
+
 import pandas as pd
 
-from data_access.api_reader import fetch_era5_temperature, get_grid_id, build_temperature_cache
+from data_access.api_reader import fetch_era5_temperature, get_grid_id
 from data_processing.storage_heating import temperature_to_heat_demand, heat_to_electric_load
 
 
-def generate_storage_heating_profiles(
+def simulate_storage_heating(
     household_df,
     token,
-    start_year="2024-01-01",
-    end_year="2024-12-31",
-    heater_efficiency=0.9,
-    T_base=15
+    start_date="2024-01-01",
+    end_date="2025-01-01",
+    heater_efficieny=0.9,
+    T_base=15,
+    storage_capacity=50
 ):
+    """
+    Generate storage heating electricity profiles.
 
-    # =====================================================
-    # API CONFIG
-    # =====================================================
+    Parameters
+    ----------
+    household_df : pandas.DataFrame
+        Household metadata containing:
+        - lat
+        - lon
+        - W_SH
+        - AN_FID
+
+    token : str
+        API authentication token.
+
+    start_date : str
+        Simulation start date.
+
+    end_date : str
+        Simulation end date.
+
+    heater_efficieny : float
+        Heater heater_efficieny.
+
+    T_base : float
+        Heating base temperature.
+
+    storage_capacity : float
+        Thermal storage capacity [kWh].
+
+    Returns
+    -------
+    pandas.DataFrame
+        Hourly electricity demand profile per household.
+    """
+
+    df = household_df.copy()
+
+    df["W_SH"] = df["W_SH"].fillna(0)
+
+
+    # --------------------------------------------------
+    # Create ERA5 grid IDs
+    # --------------------------------------------------
+
+    df["grid_id"] = df.apply(
+        lambda x: get_grid_id(
+            x["lat"],
+            x["lon"]
+        ),
+        axis=1
+    )
+
+
+    # --------------------------------------------------
+    # ERA5 API configuration
+    # --------------------------------------------------
+
     params = {
         "crs": "EPSG:4326",
         "spatial_interp": "nearest",
         "spatial_interp_samples": 3,
         "height": 100,
         "height_interp": "nearest",
-        "begin": start_year,
-        "end": end_year,
+        "begin": start_date,
+        "end": end_date,
         "resample": "",
         "resample_method": "nearest",
         "t2m:var": "t2m",
@@ -32,71 +97,78 @@ def generate_storage_heating_profiles(
         "model": "era5"
     }
 
+
     headers = {
         "Authorization": f"Bearer {token}"
     }
 
-    # =====================================================
-    # GRID TEMPERATURE CACHE
-    # =====================================================
-    grid_temperature_data, household_df = build_temperature_cache(
-        household_df, params, headers
-    )
 
-    all_profiles = []
+    # --------------------------------------------------
+    # Temperature fetching
+    # One request per grid
+    # --------------------------------------------------
 
-    # =====================================================
-    # MAIN LOOP
-    # =====================================================
-    for _, row in household_df.iterrows():
+    temperature_cache = {}
 
-        lat = row["lat"]
-        lon = row["lon"]
+    for grid in df["grid_id"].unique():
 
-        annual_electricity = row["W_SH"]
+        temperature_cache[grid] = fetch_era5_temperature(
+            grid[0],
+            grid[1],
+            params,
+            headers
+        )
 
-        grid_id = get_grid_id(lat, lon)
 
-        temperature_series = grid_temperature_data[grid_id]
+    # --------------------------------------------------
+    # Household simulation
+    # --------------------------------------------------
 
-        # -------------------------------------------------
-        # Electricity → Heat
-        # -------------------------------------------------
-        annual_heat = annual_electricity * heater_efficiency
+    profiles = []
 
-        heat_ts = temperature_to_heat_demand(
-            temperature_series=temperature_series,
-            annual_heat_demand_kwh=annual_heat,
+    for _, row in df.iterrows():
+
+        temperature = temperature_cache[
+            row["grid_id"]
+        ]
+
+
+        heat = temperature_to_heat_demand(
+            temperature_series=temperature,
+            annual_heat_demand_kwh=row["W_SH"] * heater_efficieny,
             T_base=T_base
         )
 
-        # -------------------------------------------------
-        # Convert heat → electric load (your model)
-        # -------------------------------------------------
-        electric_profile = heat_to_electric_load(heat_ts)
 
-        # -------------------------------------------------
-        # Store result
-        # -------------------------------------------------
-        tmp = pd.DataFrame({
-            "time": electric_profile.index,
-            "electric_load": electric_profile.values,
-            "household_id": row["AN_FID"],
-            "lat": lat,
-            "lon": lon
-        })
+        electric = heat_to_electric_load(
+            heat,
+            heater_efficieny=heater_efficieny,
+            storage_capacity=storage_capacity
+        )
 
-        all_profiles.append(tmp)
 
-    # =====================================================
-    # FINAL OUTPUT (OUTSIDE LOOP - IMPORTANT FIX)
-    # =====================================================
-    final_df = pd.concat(all_profiles, ignore_index=True)
+        electric.name = str(
+            row["AN_FID"]
+        )
 
-    final_wide = final_df.pivot(
-        index="time",
-        columns="household_id",
-        values="electric_load"
+        profiles.append(
+            electric
+        )
+
+
+    # --------------------------------------------------
+    # Combine household profiles
+    # --------------------------------------------------
+
+    result = pd.concat(
+        profiles,
+        axis=1
     )
 
-    return final_wide
+
+    result["total_storage_heating"] = (
+        result.sum(axis=1)
+    )
+
+
+    return result

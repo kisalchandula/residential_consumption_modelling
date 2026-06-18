@@ -1,104 +1,283 @@
-# data_processing/storage_heating.py
-
 """
-Storage heating load generation.
+Storage heating model.
 
-This module converts annual heat demand into an hourly heat demand profile
-and uses a PyPSA optimization model to calculate the corresponding
-electricity consumption of storage heating systems.
+This module converts outdoor temperature data into hourly thermal
+heating demand and then converts the thermal demand into electricity
+consumption of a storage heating system.
 
 Workflow:
-1. Convert temperature profile into heat demand distribution.
-2. Model heat storage operation with PyPSA.
-3. Calculate electricity demand required for heating.
+1. Calculate hourly heat demand from outdoor temperature.
+2. Simulate thermal storage charging and discharging.
+3. Convert thermal energy supplied by the heater into electricity demand.
+
+The storage model represents a simple night-storage heating system:
+- Storage is charged during low-demand night hours.
+- Stored heat is discharged during the day.
+- Additional electricity is consumed when storage is insufficient.
+
+The numerical storage dispatch is accelerated using Numba.
 """
 
 
 import numpy as np
 import pandas as pd
-import pypsa
+from numba import njit
 
 
-def temperature_to_heat_demand(temperature_series, annual_heat_demand_kwh, T_base=15.0):
+
+def temperature_to_heat_demand(
+    temperature_series,
+    annual_heat_demand_kwh,
+    T_base=15
+):
     """
-    Convert outdoor temperature into hourly heat demand.
+    Convert outdoor temperature into hourly heating demand.
+
+    A heating degree approach is used. When the outdoor temperature
+    falls below the heating base temperature, heating demand increases
+    proportionally.
 
     Parameters
     ----------
     temperature_series : pandas.Series
-        Outdoor temperature time series.
+        Hourly outdoor temperature profile [°C].
 
     annual_heat_demand_kwh : float
-        Annual heat demand in kWh.
+        Annual thermal heating demand [kWh].
 
-    T_base : float
-        Heating base temperature.
+    T_base : float, default=15
+        Heating base temperature [°C].
+        Above this temperature no heating demand is assumed.
 
     Returns
     -------
     pandas.Series
-        Hourly heat demand profile.
+        Hourly thermal heating demand [kWh].
     """
 
-    # Calculate heating intensity based on temperature
-    heating_signal = np.maximum(T_base - temperature_series, 0)
+    # Heating demand signal based on temperature difference
+    heating_signal = np.maximum(
+        T_base - temperature_series,
+        0
+    )
 
+    # Avoid division by zero for locations without heating demand
     if heating_signal.sum() == 0:
-        return pd.Series(0, index=temperature_series.index)
+        return pd.Series(
+            0,
+            index=temperature_series.index
+        )
 
-    # Scale hourly signal to annual heat demand
-    heat_demand = heating_signal / heating_signal.sum() * annual_heat_demand_kwh
+    # Normalize profile to match annual heat demand
+    return (
+        heating_signal /
+        heating_signal.sum() *
+        annual_heat_demand_kwh
+    )
 
-    return pd.Series(heat_demand, index=temperature_series.index)
 
 
-
-def heat_to_electric_load(heat_ts, heater_efficiency=0.9, storage_capacity=50):
+@njit
+def storage_dispatch_numba(
+    heat_values,
+    hours,
+    days,
+    efficiency,
+    storage_capacity
+):
     """
-    Convert heat demand into electricity consumption using PyPSA.
+    Numba accelerated storage heating simulation.
+
+    The algorithm simulates:
+    - charging of thermal storage during night hours
+    - storage state of charge (SOC)
+    - daytime heat supply from storage
+    - backup electricity consumption if storage is empty
 
     Parameters
     ----------
-    heat_ts : pandas.Series
-        Hourly heat demand profile.
+    heat_values : numpy.ndarray
+        Hourly thermal demand [kWh].
 
-    heater_efficiency : float
-        Efficiency of electric heating system.
+    hours : numpy.ndarray
+        Hour of each timestep.
+
+    days : numpy.ndarray
+        Day number of each timestep.
+
+    efficiency : float
+        Electrical-to-thermal conversion efficiency.
 
     storage_capacity : float
-        Thermal storage capacity.
+        Maximum thermal storage capacity [kWh].
+
+    Returns
+    -------
+    numpy.ndarray
+        Hourly electricity consumption [kWh].
+    """
+
+    n = len(heat_values)
+
+    electric = np.zeros(n)
+
+    # Initial storage state of charge
+    soc = storage_capacity * 0.5
+
+    current_day = days[0]
+    day_start = 0
+
+
+    for i in range(n + 1):
+
+        # Process one complete day
+        if i == n or days[i] != current_day:
+
+            day_end = i
+
+            # Calculate following day heat requirement
+            next_day_heat = 0.0
+
+            if i < n:
+
+                next_day = days[i]
+
+                for j in range(i, n):
+
+                    if days[j] == next_day:
+                        next_day_heat += heat_values[j]
+                    else:
+                        break
+
+
+            # Count available charging hours
+            charge_hours = 0
+
+            for j in range(day_start, day_end):
+
+                h = hours[j]
+
+                if h == 22 or h == 23 or h <= 5:
+                    charge_hours += 1
+
+
+            # Charge storage during night hours
+            if charge_hours > 0:
+
+                charge_energy = max(
+                    next_day_heat - soc,
+                    0
+                )
+
+                charge_energy = min(
+                    charge_energy,
+                    storage_capacity - soc
+                )
+
+                charge_per_hour = (
+                    charge_energy /
+                    charge_hours
+                )
+
+
+                for j in range(day_start, day_end):
+
+                    h = hours[j]
+
+                    if h == 22 or h == 23 or h <= 5:
+
+                        electric[j] += (
+                            charge_per_hour /
+                            efficiency
+                        )
+
+                        soc += charge_per_hour
+
+                        if soc > storage_capacity:
+                            soc = storage_capacity
+
+
+            # Supply heat demand from storage
+            for j in range(day_start, day_end):
+
+                demand = heat_values[j]
+
+                supplied = min(
+                    soc,
+                    demand
+                )
+
+                soc -= supplied
+
+                remaining = demand - supplied
+
+
+                # Direct electric heating if storage is empty
+                if remaining > 0:
+
+                    electric[j] += (
+                        remaining /
+                        efficiency
+                    )
+
+
+            if i < n:
+
+                current_day = days[i]
+                day_start = i
+
+
+    return electric
+
+
+
+def heat_to_electric_load(
+    heat,
+    efficiency=0.9,
+    storage_capacity=50
+):
+    """
+    Convert thermal heating demand into electricity demand.
+
+    This function applies the storage heating model and returns the
+    electricity required by the electric heater.
+
+    Parameters
+    ----------
+    heat : pandas.Series
+        Hourly thermal heating demand [kWh].
+
+    efficiency : float, default=0.9
+        Heater efficiency.
+
+    storage_capacity : float, default=50
+        Thermal storage capacity [kWh].
 
     Returns
     -------
     pandas.Series
-        Electricity consumption profile.
+        Hourly electricity consumption [kWh].
     """
 
-    # Create PyPSA network
-    n = pypsa.Network()
+    heat_values = heat.values.astype(
+        np.float64
+    )
 
-    n.set_snapshots(heat_ts.index)
+    hours = heat.index.hour.values
 
-    # Create energy buses
-    n.add("Bus", "electricity")
-    n.add("Bus", "heat")
+    days = heat.index.dayofyear.values
 
-    # Add heat demand
-    n.add("Load", "heat_demand", bus="heat", p_set=heat_ts)
 
-    # Add electricity supply
-    n.add("Generator", "grid_supply", bus="electricity", p_nom=10000, marginal_cost=0.2)
+    electric = storage_dispatch_numba(
+        heat_values,
+        hours,
+        days,
+        efficiency,
+        storage_capacity
+    )
 
-    # Add thermal storage
-    n.add("Store", "water_tank", bus="heat", e_nom=storage_capacity, e_initial=storage_capacity / 2, e_cyclic=True)
 
-    # Add electric heater
-    n.add("Link", "power_to_heat", bus0="electricity", bus1="heat", efficiency=heater_efficiency, p_nom=10000)
-
-    # Optimize storage operation
-    n.optimize()
-
-    # Extract electricity consumption
-    electric_load = n.links_t.p0["power_to_heat"].copy()
-
-    return electric_load
+    return pd.Series(
+        electric,
+        index=heat.index
+    )
