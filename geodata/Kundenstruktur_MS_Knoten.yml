@@ -1,0 +1,17 @@
+Metadata:
+  source: eam
+  file_type: gpkg
+  comment: ''
+  uploaded_from: dhorst
+  title: Kundenstruktur_MS_Knoten
+  description: 'Mittelspannungsknoten (MS) aus der Kundenstruktur mit räumlicher Geometrie und Zuordnung zu UW und Netzgebieten.'
+  license: confidential
+  created: '2026-02-10'
+  spatial_extent:
+  - 517245.375
+  - 5623061.0
+  - 559195.875
+  - 5680238.5
+  temporal_extent: null
+  temporal_resolution: null
+  unit: null

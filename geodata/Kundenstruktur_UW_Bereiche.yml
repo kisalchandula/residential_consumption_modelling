@@ -1,0 +1,17 @@
+Metadata:
+  source: eam
+  file_type: gpkg
+  comment: ''
+  uploaded_from: dhorst
+  title: UW_Bereich_Kundenstruktur
+  description: 'Umspannwerksbereich (UW) aus der Kundenstruktur mit räumlicher Ausdehnung und Zuordnung zu Netzgebieten.'
+  license: confidential
+  created: '2026-02-10'
+  spatial_extent:
+  - 528249.5625
+  - 5633483.0
+  - 550457.4375
+  - 5671492.0
+  temporal_extent: null
+  temporal_resolution: null
+  unit: null

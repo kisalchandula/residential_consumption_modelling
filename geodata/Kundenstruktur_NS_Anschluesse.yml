@@ -1,0 +1,18 @@
+Metadata:
+  source: eam
+  file_type: gpkg
+  comment: ''
+  uploaded_from: dhorst
+  title: Kundenstruktur_NS_Anschluesse
+  description: 'Niederspannungsanschlüsse (GeoPackage layer) with spatial geometry and transformer assignment information.'
+  license: confidential
+  created: '2026-02-10'
+  spatial_extent:
+  - 517590.875
+  - 5622602.0
+  - 561465.1875
+  - 5680489.0
+  temporal_extent: null
+  temporal_resolution: null
+  unit: null
+
