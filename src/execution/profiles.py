@@ -151,3 +151,201 @@ def create_residual_load(
     )
 
     return df["residual_load"], df
+
+
+
+
+def normalize_profile(profile, target_kwh, dt=0.5):
+    """
+    Scale kW profile to match annual energy target (kWh).
+    """
+    current_kwh = profile.sum() * dt
+
+    if current_kwh == 0:
+        return profile
+
+    return profile * (target_kwh / current_kwh)
+
+
+import pandas as pd
+import glob
+import os
+import re
+
+
+def normalize_uw_profiles(
+    base_folder,
+    yearly_energy_mapping,
+    start_date,
+    end_date,
+    timestep_hours=0.5
+):
+    """
+    Aggregate and normalize UW synthetic profiles.
+
+    Parameters
+    ----------
+    base_folder : str
+        Folder containing generated_chunksX folders.
+
+    yearly_energy_mapping : dict
+        Dictionary {hh_id: yearly energy in kWh}
+        Example:
+        {
+            "10001": 3500,
+            "10002": 4200
+        }
+
+    start_date : str
+        Start date of the period to normalize.
+        Example: "2024-01-01"
+
+    end_date : str
+        End date of the period to normalize.
+        Example: "2024-12-31 23:30"
+
+    timestep_hours : float
+        Duration of each timestep.
+        For 30-min profiles use 0.5.
+
+    Returns
+    -------
+    None
+    """
+
+    # ---------------------------------
+    # FIND GENERATED CHUNK FOLDERS
+    # ---------------------------------
+    all_folders = glob.glob(
+        os.path.join(base_folder, "generated_chunks*")
+    )
+
+    def extract_number(path):
+        match = re.search(r"(\d+)$", path)
+        return int(match.group(1)) if match else -1
+
+    all_folders = sorted(
+        all_folders,
+        key=extract_number
+    )
+
+
+    # ---------------------------------
+    # PROCESS EACH CHUNK FOLDER
+    # ---------------------------------
+    for folder in all_folders:
+
+        print(f"\nProcessing: {folder}")
+
+        files = sorted(
+            glob.glob(
+                os.path.join(folder, "*.parquet")
+            )
+        )
+
+        if len(files) == 0:
+            print(" → No parquet files found")
+            continue
+
+
+        # Load profiles
+        dfs = [
+            pd.read_parquet(f)
+            for f in files
+        ]
+
+        profiles = pd.concat(
+            dfs,
+            axis=1
+        )
+
+        # Remove duplicated HH
+        profiles = profiles.loc[
+            :,
+            ~profiles.columns.duplicated()
+        ]
+
+
+        # Ensure datetime index
+        profiles.index = pd.to_datetime(
+            profiles.index
+        )
+
+
+        # ---------------------------------
+        # SELECT REQUIRED PERIOD
+        # ---------------------------------
+        profiles = profiles.loc[
+            start_date:end_date
+        ]
+
+
+        # ---------------------------------
+        # NORMALIZE EACH HOUSEHOLD
+        # ---------------------------------
+        normalized = profiles.copy()
+
+
+        for hh_id in profiles.columns:
+
+            # skip if no mapping available
+            if hh_id not in yearly_energy_mapping:
+                continue
+
+
+            target_energy = yearly_energy_mapping[hh_id]
+
+
+            # Current generated energy
+            current_energy = (
+                profiles[hh_id].sum()
+                * timestep_hours
+            )
+
+
+            if current_energy == 0:
+                print(
+                    f"Warning: {hh_id} has zero energy"
+                )
+                continue
+
+
+            # Scaling factor
+            factor = (
+                target_energy /
+                current_energy
+            )
+
+
+            normalized[hh_id] = (
+                profiles[hh_id]
+                * factor
+            )
+
+
+        # ---------------------------------
+        # CREATE UW AGGREGATE PROFILE
+        # ---------------------------------
+        uw_sum_profile = pd.DataFrame(
+            {
+                "uw_sum_profile":
+                normalized.sum(axis=1)
+            }
+        )
+
+
+        # Save
+        output_path = os.path.join(
+            folder,
+            "uw_sum_profile_normalized.parquet"
+        )
+
+        uw_sum_profile.to_parquet(
+            output_path
+        )
+
+
+        print(
+            " → Saved:",
+            output_path
+        )

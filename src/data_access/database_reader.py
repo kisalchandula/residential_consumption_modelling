@@ -50,7 +50,6 @@ def create_db_engine(config, section: str = "database"):
     db_port = config[section]["port"]
 
     db_url = f"postgresql://{db_user}:{db_pass}@{db_host}:{db_port}/{db_name}"
-    print(db_url)
 
     engine = create_engine(db_url)
     return engine
@@ -100,6 +99,50 @@ def load_household_pv_data(config, schema: str, table: str):
     print(f"Loaded {len(df)} rows from {schema}.{table}")
 
     return df
+
+
+
+# =====================================================
+# HEAT PUMP HOUSEHOLD LOADER
+# =====================================================
+def load_household_data(config, schema: str, table: str):
+    """
+    Load households with heat pumps (W_WP > 0).
+
+    Parameters
+    ----------
+    config : ConfigParser
+        Loaded configuration object
+    schema : str
+        Database schema name
+    table : str
+        Table name
+
+    Returns
+    -------
+    pd.DataFrame
+        Household IDs and annual heat pump consumption.
+    """
+
+    engine = create_db_engine(config)
+
+    query = f"""
+    SELECT
+    *,
+    ST_X(ST_Transform("AN_geom", 4326)) AS lon,
+    ST_Y(ST_Transform("AN_geom", 4326)) AS lat
+    FROM eam_projekt."Kundenstruktur_NS_Anschluesse"
+    WHERE "W_H0" > 0
+    """
+
+    df = pd.read_sql(query, engine)
+
+    print(f"Loaded {len(df)} W_H0 households from {schema}.{table}")
+
+    return df
+
+
+
 
 
 # =====================================================
@@ -173,7 +216,7 @@ def load_storage_heating_data(config, schema: str, table: str):
         ST_X(ST_Transform("AN_geom", 4326)) AS lon,
         ST_Y(ST_Transform("AN_geom", 4326)) AS lat
     FROM {schema}."{table}"
-    WHERE "W_SH" > 0
+    WHERE "W_SH" > 0 AND "W_H0" > 0
     """
 
     df = pd.read_sql(query, engine)
@@ -189,12 +232,17 @@ def load_storage_heating_data(config, schema: str, table: str):
 # =====================================================
 def load_household_wh0_mapping(config, schema: str, table: str):
     """
-    Load household W_H0 mapping from PostgreSQL and return dict.
+    Load household W_H0 and CWGAN cluster mapping from PostgreSQL.
 
     Returns
     -------
     dict
-        {hh_id: W_H0}
+        {
+            hh_id: {
+                "W_H0": W_H0,
+                "id_cwgan_adjusted": id_cwgan_adjusted
+            }
+        }
     """
 
     engine = create_db_engine(config)
@@ -202,7 +250,8 @@ def load_household_wh0_mapping(config, schema: str, table: str):
     query = f"""
     SELECT
         hh_id,
-        "W_H0"
+        "W_H0",
+        id_cwgan
     FROM "{schema}"."{table}"
     """
 
@@ -211,12 +260,26 @@ def load_household_wh0_mapping(config, schema: str, table: str):
     print(f"Loaded {len(df)} rows from {schema}.{table}")
 
     # clean data
-    df = df.dropna(subset=["hh_id", "W_H0"])
+    df = df.dropna(
+        subset=["hh_id", "W_H0", "id_cwgan"]
+    )
 
-    # handle duplicates safely
-    df = df.groupby("hh_id", as_index=False)["W_H0"].mean()
+    # handle duplicate hh_id safely
+    df = (
+        df.groupby("hh_id", as_index=False)
+          .agg({
+              "W_H0": "mean",
+              "id_cwgan": "first"
+          })
+    )
 
-    return dict(zip(df["hh_id"], df["W_H0"]))
+    mapping = (
+        df.set_index("hh_id")
+          [["W_H0", "id_cwgan"]]
+          .to_dict("index")
+    )
+
+    return mapping
 
 
 # =====================================================

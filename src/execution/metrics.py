@@ -240,17 +240,28 @@ def compare_load_profiles(
         )
     )
 
+
+    # PEAK DEMAND ERROR
+    # ===================================================
+    peak_meas = meas.max()
+    peak_gan = gan.max()
+
+    relative_peak_error  = (
+        abs(peak_gan - peak_meas)/ (abs(peak_meas))* 100
+    )
+
     # ===================================================
     # OUTPUT
     # ===================================================
     metrics = {
-        "Wasserstein": wass_distance,
-        "JS_divergence": js_distance,
-        "KL_divergence": kl_distance,
-        "ACF_distance": acf_distance,
-        "PACF_distance": pacf_distance,
-        "Hurst_distance": hurst_distance,
-        "FFT_distance": fft_distance
+    "Wasserstein": wass_distance,
+    "JS_divergence": js_distance,
+    "KL_divergence": kl_distance,
+    "ACF_distance": acf_distance,
+    "PACF_distance": pacf_distance,
+    "Hurst_distance": hurst_distance,
+    "FFT_distance": fft_distance,
+    "Relative Peak Error (%)": relative_peak_error 
     }
 
     return pd.Series(metrics)
