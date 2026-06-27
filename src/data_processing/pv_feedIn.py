@@ -10,7 +10,7 @@ Workflow:
 1. Calculate solar position from location and time.
 2. Estimate DNI and DHI from GHI.
 3. Calculate plane-of-array irradiance for each PV system.
-4. Convert irradiance into electrical PV power output.
+4. Convert solar irradiance into electrical PV power output.
 
 The calculation uses household-specific PV parameters:
 - roof slope (tilt)
@@ -23,10 +23,7 @@ import numpy as np
 import pandas as pd
 import pvlib
 
-
-EFFICIENCY = 0.20
-
-def compute_pv_power(ghi_series, lat, lon, metadata_df, tz="Europe/Berlin"):
+def compute_pv_power(ghi_series, lat, lon, metadata_df, pv_efficiency=0.20, tz="Europe/Berlin"):
     """
     Convert irradiance into PV power generation profiles.
 
@@ -87,9 +84,7 @@ def compute_pv_power(ghi_series, lat, lon, metadata_df, tz="Europe/Berlin"):
     capacity = metadata_df["ea_p_pv"].values
 
 
-    # Expand dimensions:
-    # rows = timesteps
-    # columns = households
+    # Expand dimensions: rows = timesteps / columns = households
     tilt_2d = tilt[np.newaxis, :]
     az_2d = azimuth[np.newaxis, :]
     cap_2d = capacity[np.newaxis, :]
@@ -102,9 +97,9 @@ def compute_pv_power(ghi_series, lat, lon, metadata_df, tz="Europe/Berlin"):
     zenith = solar_position["apparent_zenith"].values[:, np.newaxis]
     azimuth_sun = solar_position["azimuth"].values[:, np.newaxis]
 
-
-    # Calculate irradiance received by tilted PV panels
-    poa = pvlib.irradiance.get_total_irradiance(
+    # Calculate irradiance received by tilted PV panels 
+    # poa(Plane of Array)
+    poa = pvlib.irradiance.get_total_irradiance( 
         surface_tilt=tilt_2d,
         surface_azimuth=az_2d,
         dni=dni_2d,
@@ -114,10 +109,8 @@ def compute_pv_power(ghi_series, lat, lon, metadata_df, tz="Europe/Berlin"):
         solar_azimuth=azimuth_sun
     )
 
-
-    # Convert irradiance into electrical PV power
-    power = poa["poa_global"] * cap_2d * EFFICIENCY / 1000
-
+    # Convert solar irradiance into electrical PV power
+    power = poa["poa_global"] * cap_2d * pv_efficiency / 1000 # w-->kw
 
     # Use household IDs as output columns
     cols = metadata_df["an_fid"].astype(str).values

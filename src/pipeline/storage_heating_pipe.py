@@ -20,9 +20,9 @@ def simulate_storage_heating(
     token,
     start_date="2024-01-01",
     end_date="2025-01-01",
-    heater_efficieny=0.9,
+    heater_efficiency=0.60,
     T_base=15,
-    storage_capacity=50
+    storage_capacity=10
 ):
     """
     Generate storage heating electricity profiles.
@@ -45,8 +45,8 @@ def simulate_storage_heating(
     end_date : str
         Simulation end date.
 
-    heater_efficieny : float
-        Heater heater_efficieny.
+    heater_efficiency : float
+        Heater heater_efficiency.
 
     T_base : float
         Heating base temperature.
@@ -135,14 +135,14 @@ def simulate_storage_heating(
 
         heat = temperature_to_heat_demand(
             temperature_series=temperature,
-            annual_heat_demand_kwh=row["W_SH"] * heater_efficieny,
+            annual_heat_demand_kwh=row["W_SH"] * heater_efficiency,
             T_base=T_base
         )
 
 
         electric = heat_to_electric_load(
             heat,
-            heater_efficieny=heater_efficieny,
+            heater_efficiency=heater_efficiency,
             storage_capacity=storage_capacity
         )
 

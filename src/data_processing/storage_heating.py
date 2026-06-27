@@ -233,7 +233,7 @@ def storage_dispatch_numba(
 
 def heat_to_electric_load(
     heat,
-    efficiency=0.9,
+    heater_efficiency=0.60,
     storage_capacity=50
 ):
     """
@@ -272,7 +272,7 @@ def heat_to_electric_load(
         heat_values,
         hours,
         days,
-        efficiency,
+        heater_efficiency,
         storage_capacity
     )
 

@@ -9,7 +9,8 @@ def generate_heatpump_profiles(
     start_year="2023-01-01",
     end_year="2025-01-01",
     kmeans=None,
-    token=None
+    token=None,
+    plot=False
 ):
     """
     Generate heat pump load profiles per household using ERA5 temperature clustering.
@@ -126,5 +127,33 @@ def generate_heatpump_profiles(
             columns="household_id",
             values="hp_load"
         )
+
+
+    # =====================================================
+    # OPTIONAL PLOT
+    # =====================================================
+    if plot:
+
+        import matplotlib.pyplot as plt
+
+        total_hp = final_wide.sum(axis=1)
+
+        plt.figure(figsize=(12, 4))
+
+        plt.plot(
+            total_hp.index,
+            total_hp.values,
+            linewidth=0.8,
+            label="Total Heat Pump Load"
+        )
+
+        plt.xlabel("Time")
+        plt.ylabel("Load [kWh]")
+        plt.title("Aggregated Heat Pump Load")
+        plt.grid(True, alpha=0.3)
+        plt.legend()
+        plt.tight_layout()
+
+        plt.show()
 
     return final_wide
